@@ -19,7 +19,8 @@ boto3
 mypy-boto3-s3
 botocore
 fastapi
-uvicorn4
+uvicorn
 jinja2
 python-multipart
 -e .
+setuptools
