@@ -2,8 +2,8 @@ import json
 import sys
 
 import pandas as pd
-from evidently.model_profile import Profile
-from evidently.model_profile.sections import DataDriftProfileSection
+from evidently import Report
+from evidently.metrics import DriftedColumnsCount
 
 from pandas import DataFrame
 
@@ -24,9 +24,9 @@ class DataValidation:
         try:
             self.data_ingestion_artifact = data_ingestion_artifact
             self.data_validation_config = data_validation_config
-            self._schema_config =read_yaml_file(file_path=SCHEMA_FILE_PATH)
+            self._schema_config = read_yaml_file(file_path=SCHEMA_FILE_PATH)
         except Exception as e:
-            raise USvisaException(e,sys)
+            raise USvisaException(e, sys)
 
     def validate_number_of_columns(self, dataframe: DataFrame) -> bool:
         """
@@ -59,18 +59,17 @@ class DataValidation:
                 if column not in dataframe_columns:
                     missing_numerical_columns.append(column)
 
-            if len(missing_numerical_columns)>0:
+            if len(missing_numerical_columns) > 0:
                 logging.info(f"Missing numerical column: {missing_numerical_columns}")
-
 
             for column in self._schema_config["categorical_columns"]:
                 if column not in dataframe_columns:
                     missing_categorical_columns.append(column)
 
-            if len(missing_categorical_columns)>0:
+            if len(missing_categorical_columns) > 0:
                 logging.info(f"Missing categorical column: {missing_categorical_columns}")
 
-            return False if len(missing_categorical_columns)>0 or len(missing_numerical_columns)>0 else True
+            return False if len(missing_categorical_columns) > 0 or len(missing_numerical_columns) > 0 else True
         except Exception as e:
             raise USvisaException(e, sys) from e
 
@@ -81,7 +80,7 @@ class DataValidation:
         except Exception as e:
             raise USvisaException(e, sys)
 
-    def detect_dataset_drift(self, reference_df: DataFrame, current_df: DataFrame, ) -> bool:
+    def detect_dataset_drift(self, reference_df: DataFrame, current_df: DataFrame) -> bool:
         """
         Method Name :   detect_dataset_drift
         Description :   This method validates if drift is detected
@@ -90,21 +89,45 @@ class DataValidation:
         On Failure  :   Write an exception log and then raise an exception
         """
         try:
-            data_drift_profile = Profile(sections=[DataDriftProfileSection()])
-
-            data_drift_profile.calculate(reference_df, current_df)
-
-            report = data_drift_profile.json()
-            json_report = json.loads(report)
-
-            write_yaml_file(file_path=self.data_validation_config.drift_report_file_path, content=json_report)
-
-            n_features = json_report["data_drift"]["data"]["metrics"]["n_features"]
-            n_drifted_features = json_report["data_drift"]["data"]["metrics"]["n_drifted_features"]
-
-            logging.info(f"{n_drifted_features}/{n_features} drift detected.")
-            drift_status = json_report["data_drift"]["data"]["metrics"]["dataset_drift"]
-            return drift_status
+            # Create a report with DriftedColumnsCount for Evidently 0.7.14
+            drift_metric = DriftedColumnsCount()
+            data_drift_report = Report(metrics=[drift_metric])
+            
+            # Run the report
+            data_drift_report.run(reference_data=reference_df, current_data=current_df)
+            
+            # Get the metric result as dictionary
+            metric_dict = drift_metric.dict()
+            
+            # Extract drift information
+            dataset_drift = False
+            n_features = 0
+            n_drifted_features = 0
+            
+            # The result should be in the metric dict
+            if 'result' in metric_dict:
+                result = metric_dict['result']
+                n_features = result.get('number_of_columns', 0)
+                n_drifted_features = result.get('number_of_drifted_columns', 0)
+                
+                # Consider dataset drift if any column has drift
+                dataset_drift = n_drifted_features > 0
+            
+            # Save report summary
+            try:
+                report_dict = {
+                    'drift_detected': dataset_drift,
+                    'number_of_columns': n_features,
+                    'number_of_drifted_columns': n_drifted_features,
+                    'metric_details': metric_dict
+                }
+                write_yaml_file(file_path=self.data_validation_config.drift_report_file_path, content=report_dict)
+            except Exception as save_error:
+                logging.info(f"Could not save drift report to file: {save_error}")
+            
+            logging.info(f"Dataset drift detection completed: {n_drifted_features}/{n_features} features drifted.")
+            
+            return dataset_drift
         except Exception as e:
             raise USvisaException(e, sys) from e
 
@@ -116,7 +139,6 @@ class DataValidation:
         Output      :   Returns bool value based on validation results
         On Failure  :   Write an exception log and then raise an exception
         """
-
         try:
             validation_error_msg = ""
             logging.info("Starting data validation")
@@ -127,18 +149,17 @@ class DataValidation:
             logging.info(f"All required columns present in training dataframe: {status}")
             if not status:
                 validation_error_msg += f"Columns are missing in training dataframe."
+            
             status = self.validate_number_of_columns(dataframe=test_df)
-
             logging.info(f"All required columns present in testing dataframe: {status}")
             if not status:
                 validation_error_msg += f"Columns are missing in test dataframe."
 
             status = self.is_column_exist(df=train_df)
-
             if not status:
                 validation_error_msg += f"Columns are missing in training dataframe."
+            
             status = self.is_column_exist(df=test_df)
-
             if not status:
                 validation_error_msg += f"columns are missing in test dataframe."
 
@@ -153,7 +174,6 @@ class DataValidation:
                     validation_error_msg = "Drift not detected"
             else:
                 logging.info(f"Validation_error: {validation_error_msg}")
-                
 
             data_validation_artifact = DataValidationArtifact(
                 validation_status=validation_status,
