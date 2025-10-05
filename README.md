@@ -1,4 +1,4 @@
-# US-Visa-Approval-Prediction1
+# US-Visa-Approval-Prediction
 
 ### Git Commands
 ```
